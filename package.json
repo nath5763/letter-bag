@@ -1,0 +1,28 @@
+{
+  "name": "letter-bag",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "practice": "node scripts/practice.mjs",
+    "test": "node --test",
+    "build": "vite build",
+    "dev": "devvit playtest",
+    "deploy": "vite build && devvit upload"
+  },
+  "engines": {
+    "node": ">=24.18.0"
+  },
+  "dependencies": {
+    "@devvit/start": "0.15.3",
+    "@devvit/web": "0.15.3",
+    "@hono/node-server": "2.1.6",
+    "devvit": "0.15.3",
+    "hono": "4.13.17"
+  },
+  "devDependencies": {
+    "vite": "8.3.7",
+    "typescript": "6.0.3"
+  },
+  "license": "BSD-3-Clause"
+}

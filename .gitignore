@@ -1,0 +1,5 @@
+node_modules/
+dist/
+.env
+.chrome-test/
+.visual-browser/
