@@ -1,5 +1,5 @@
 export async function api(path, body, fetcher = fetch) {
-  const response = await fetcher(`/api/${path}`, path === 'state' ? {} : {
+  const response = await fetcher(`/api/${path}`, path === 'state' || path === 'leaderboard' ? {} : {
     method: 'POST',
     ...(body === undefined ? {} : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
   });

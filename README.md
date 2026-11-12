@@ -1,6 +1,6 @@
 # Daily Letter Bag
 
-A 90-second word game built as a Reddit Devvit Web interactive post. Everyone playing a dated post gets the same ordered 30 letters. Select tiles to make words; used letters refill from the bag. The Reddit slice saves one attempt per signed-in player per UTC day, without a public leaderboard yet.
+A 90-second word game built as a Reddit Devvit Web interactive post. Everyone playing a dated post gets the same ordered 30 letters. The standard puzzle has 12 vowels and 18 consonants, split near 6 vowels and 9 consonants in both the opening rack and bag. Select tiles to make words; used letters refill from the bag. The Reddit slice saves one attempt per signed-in player per UTC day, without a public leaderboard yet.
 
 ## Play locally
 

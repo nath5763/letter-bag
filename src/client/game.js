@@ -1,6 +1,7 @@
 import { createGame, finish, publicGame, submitWord, timeLeft } from '../shared/engine.js';
 import { resultCard } from '../shared/result.js';
 import { api } from './api.js';
+import { telemetry } from '@devvit/analytics/client/reddit';
 
 const practice = location.hostname === '127.0.0.1' || location.hostname === 'localhost';
 const app = document.getElementById('app');
@@ -15,7 +16,26 @@ let closed = false;
 let postUrl = '';
 let infoOpen = false;
 let arrivingTiles = new Set();
+let profile = null;
+let leaderboard = null;
+let leaderboardOpen = false;
+let finalizing = false;
 const localRound = () => practice || anonymous;
+async function track(call) {
+  if (localRound()) return;
+  try {
+    const response = await call();
+    if (response?.receipt && !['JOURNEY_RECEIPT_VALID', 'JOURNEY_RECEIPT_REUSED'].includes(response.receipt.status))
+      console.info('Journey receipt:', response.receipt.status, response.receipt.message);
+  } catch (error) { console.warn('Journey telemetry failed', error); }
+}
+async function reportEnd() {
+  if (!localRound() && game?.endedAt !== null && telemetry.getActiveJourneyId())
+    await track(() => telemetry.endJourney());
+}
+async function refreshProfile() {
+  if (!localRound()) profile = (await api('state')).profile;
+}
 
 async function init() {
   try {
@@ -29,9 +49,12 @@ async function init() {
       anonymous = data.anonymous;
       closed = data.closed;
       postUrl = data.postUrl || '';
+      profile = data.profile;
       game = anonymous ? createGame(data.game.seed) : data.game;
     }
     render();
+    if (!practice) await track(() => telemetry.appReady());
+    await reportEnd();
   } catch (error) { app.innerHTML = `<div class="error-card"><h1>Bag unavailable</h1><p>${escapeHtml(error.message)}</p><button onclick="location.reload()">Try again</button></div>`; }
 }
 
@@ -58,18 +81,27 @@ function render() {
     <header class="topline"><span class="brand">DAILY LETTER BAG</span><div class="top-actions"><span class="mode">${practice ? 'PRACTICE' : `GAME #${escapeHtml(game.seed.replaceAll('-', ''))}`}</span>${!started ? '<button type="button" class="info-button" id="info" aria-haspopup="dialog">How to play</button>' : ''}</div></header>
     <section class="dashboard"><div><span class="label">SCORE</span><strong>${state.score}</strong></div><div><span class="label">TIME</span><strong id="time-value" class="${state.remaining <= 10 && active ? 'urgent' : ''}"><span id="time-count">${state.remaining}</span><small>s</small></strong></div><div><span class="label">BAG</span><strong>${state.bagRemaining}</strong></div></section>
     <div class="timer" aria-hidden="true"><span style="width:${pct}%"></span></div>
+    <section class="tabletop">
     ${ended ? `<section class="result-stage"><div class="result-card" aria-label="${escapeHtml(result.label)}"><div class="result-card-top"><span class="label">${escapeHtml(result.label)}</span><span class="result-number">${result.gameNumber ? `GAME #${result.gameNumber}` : 'PRACTICE'}</span></div><strong>${state.score}</strong><span class="result-score-label">POINTS</span><div class="result-stats"><div><b>${result.wordCount}</b><span>WORDS</span></div><div><b>${result.longest}</b><span>LONGEST WORD</span></div></div><p>Copy this summary without revealing any letters or words.</p><div class="result-actions"><button type="button" class="primary" id="copy-result">Copy result</button></div></div>${state.words.length ? `<section class="history"><div class="section-head"><span>WORDS PLAYED</span><span>${state.words.length}</span></div><div class="word-list">${[...state.words].reverse().map(entry => `<div><span>${escapeHtml(entry.word)}</span><b>+${entry.points}</b></div>`).join('')}</div></section>` : ''}</section>` : `
-    <section class="tabletop"><div class="bag-scene" aria-hidden="true"><div class="draw-bag"><span class="bag-stitch"></span><span class="bag-mark">LB</span></div><span class="bag-caption">LETTER BAG</span></div>
-      ${active ? `<section class="compose"><div class="section-head"><span>YOUR WORD</span><span id="word-points">${word.length >= 3 ? `+${1 + word.length * (word.length + 1) / 2} POINTS` : '3 LETTERS MINIMUM'}</span></div><div class="word-controls"><div class="wordline">${wordTiles || '<span>Tap letters to form a word</span>'}</div><button type="button" class="back-button" id="back" ${!selected.length ? 'disabled' : ''} aria-label="Remove last letter">&larr; Back</button></div></section>` : ''}
+    <div class="bag-row"><div class="bag-scene" aria-hidden="true"><div class="draw-bag"></div></div><section class="preview-area"><div class="section-head"><span>UP NEXT</span></div><div class="preview">${state.bag.map(tile => `<span class="preview-tile ${!started ? 'masked' : ''}">${started ? tile.letter : '?'}</span>`).join('') || '<span class="empty">The bag is empty</span>'}</div></section></div>
+      ${active ? `<section class="compose"><div class="section-head"><span>YOUR WORD</span><span id="word-points">${word.length >= 3 ? `+${1 + word.length * (word.length + 1) / 2} POINTS` : '3 LETTERS MINIMUM'}</span></div><div class="word-controls"><div class="wordline">${wordTiles || '<span>Tap letters to form a word</span>'}</div><button type="button" class="back-button" id="back" ${!selected.length ? 'disabled' : ''} aria-label="Remove last letter">&larr; Back</button></div></section>` : '<section class="opening-copy"><div class="section-head"><span>YOUR WORD</span></div><p>Find as many words as you can before time runs out.</p></section>'}
       <section class="play-area"><div class="section-head"><span>YOUR LETTERS</span><span>${game.rack.length} AVAILABLE</span></div><div class="rack">${game.rack.map((tile, index) => `<button type="button" class="tile ${!started ? 'masked' : ''} ${selected.includes(tile.id) ? 'picked' : ''} ${arrivingTiles.has(tile.id) ? 'drawn' : ''}" style="--draw-index:${index}" data-tile="${tile.id}" ${!active || selected.includes(tile.id) ? 'disabled' : ''} aria-label="${started ? `Letter ${tile.letter}` : 'Hidden letter'}">${started ? tile.letter : '?'}</button>`).join('')}</div></section>
-      <section class="preview-area"><div class="section-head"><span>UP NEXT</span><span>PREVIEW</span></div><div class="preview">${state.bag.map(tile => `<span class="preview-tile ${!started ? 'masked' : ''}">${started ? tile.letter : '?'}</span>`).join('') || '<span class="empty">The bag is empty</span>'}</div></section></section>
     <section class="round-actions"><div class="actions">${!started ? unavailable ? '<div class="end-card"><span class="label">PUZZLE CLOSED</span><p>This daily puzzle is closed. Open today\'s post to play.</p></div>' : '<button type="button" class="primary" id="start">Start</button>' : `<button type="button" class="primary" id="submit" ${selected.length < 3 || busy ? 'disabled' : ''}>Play word</button><button type="button" class="secondary" id="clear" ${!selected.length ? 'disabled' : ''}>Clear</button><button type="button" class="text-button" id="finish">Finish early</button>`}</div></section>`}
     <div class="feedback" role="status">${escapeHtml(message)}</div>
+    </section>
     ${practice && !active ? `<footer class="practice-tools"><button id="replay">Replay seed</button><button id="new">New puzzle</button><span>Local practice &middot; unlimited attempts</span></footer>` : ''}
-    ${infoOpen && !started ? `<div class="info-backdrop" id="info-backdrop"><section class="info-dialog" role="dialog" aria-modal="true" aria-labelledby="info-title"><button type="button" class="info-close" id="info-close" aria-label="Close instructions">&times;</button><span class="label">HOW TO PLAY</span><h2 id="info-title">Daily Letter Bag</h2><ul><li>You have ${game.config.seconds} seconds to make as many words as you can.</li><li>Tap at least 3 wooden letters to form a word, then tap Play word.</li><li>Used letters leave your rack. The bag replaces them in order until it is empty; the next five letters appear in the preview.</li><li>Each word scores 1 point plus 1, 2, 3, and so on for each letter position. A 3-letter word earns 7 points.</li><li>A word can score once per round. Invalid words do not use letters.</li>${practice ? '' : '<li>Signed-in players get one scored attempt per UTC day.</li>'}</ul><button type="button" class="primary" id="info-done">Got it</button></section></div>` : ''}`;
+    ${infoOpen && !started ? `<div class="info-backdrop" id="info-backdrop"><section class="info-dialog" role="dialog" aria-modal="true" aria-labelledby="info-title"><button type="button" class="info-close" id="info-close" aria-label="Close instructions">&times;</button><span class="label">HOW TO PLAY</span><h2 id="info-title">Daily Letter Bag</h2><ul><li>You have ${game.config.seconds} seconds to make as many words as you can.</li><li>A standard 30-letter puzzle has 12 vowels and 18 consonants. Each half starts near 6 vowels and 9 consonants.</li><li>Tap at least 3 wooden letters to form a word, then tap Play word.</li><li>Used letters leave your rack. The bag replaces them in order until it is empty; the next five letters appear in the preview.</li><li>Each word scores 1 point plus 1, 2, 3, and so on for each letter position. A 3-letter word earns 7 points.</li><li>A word can score once per round. Invalid words do not use letters.</li>${practice ? '' : '<li>Signed-in players get one scored attempt per UTC day.</li>'}</ul><button type="button" class="primary" id="info-done">Got it</button></section></div>` : ''}`;
+  if (!started && profile) app.querySelector('.opening-copy')?.insertAdjacentHTML('beforeend', `<p class="streak-note">Current streak: ${profile.current} ${profile.current === 1 ? 'day' : 'days'} · Best: ${profile.best}</p>`);
+  if (infoOpen && !practice) app.querySelector('.info-dialog ul')?.insertAdjacentHTML('beforeend', '<li>Finish a signed-in daily round with at least one valid word to grow your UTC-day streak and enter the community leaderboards.</li>');
+  if (ended && !localRound()) app.querySelector('.result-actions')?.insertAdjacentHTML('beforeend', '<button type="button" class="secondary" id="leaderboard">Leaderboards</button>');
+  if (leaderboardOpen) app.insertAdjacentHTML('beforeend', `<div class="info-backdrop" id="leaderboard-backdrop"><section class="info-dialog leaderboard-dialog" role="dialog" aria-modal="true" aria-labelledby="leaderboard-title"><button type="button" class="info-close" id="leaderboard-close" aria-label="Close leaderboards">&times;</button><span class="label">COMMUNITY STANDINGS</span><h2 id="leaderboard-title">Leaderboards</h2>${leaderboard ? `<h3>Today · ${escapeHtml(leaderboard.day)}</h3>${boardHtml(leaderboard.daily)}<h3>All time · total points</h3>${boardHtml(leaderboard.allTime)}` : '<p>Loading standings…</p>'}</section></div>`);
   arrivingTiles = new Set();
   bind();
   if (infoOpen && !started) app.querySelector('#info-close')?.focus();
+}
+
+function boardHtml(rows) {
+  return rows.length ? `<ol class="leaderboard-list">${rows.map(row => `<li><span>${row.rank}. ${escapeHtml(row.name)}</span><b>${row.score}</b></li>`).join('')}</ol>` : '<p>No qualifying rounds yet.</p>';
 }
 
 function refreshSelection() {
@@ -114,6 +146,14 @@ function resultFeedback(text) {
 }
 
 function bind() {
+  app.querySelector('#leaderboard')?.addEventListener('click', async () => {
+    leaderboardOpen = true; leaderboard = null; render();
+    try { leaderboard = await api('leaderboard'); }
+    catch (error) { leaderboardOpen = false; message = error.message; }
+    render();
+  });
+  app.querySelector('#leaderboard-close')?.addEventListener('click', () => { leaderboardOpen = false; render(); app.querySelector('#leaderboard')?.focus(); });
+  app.querySelector('#leaderboard-backdrop')?.addEventListener('click', event => { if (event.target.id === 'leaderboard-backdrop') { leaderboardOpen = false; render(); } });
   app.querySelector('#info')?.addEventListener('click', () => { infoOpen = true; render(); });
   const closeInfo = () => { infoOpen = false; render(); app.querySelector('#info')?.focus(); };
   app.querySelector('#info-close')?.addEventListener('click', closeInfo);
@@ -144,25 +184,32 @@ function bind() {
   app.querySelector('#clear')?.addEventListener('click', () => { selected = []; refreshSelection(); });
   app.querySelector('#start')?.addEventListener('click', async () => {
     if (!practice && game.seed !== new Date().toISOString().slice(0, 10)) { closed = true; render(); return; }
-    try { busy = true; if (localRound()) game = { ...game, startedAt: Date.now() }; else game = (await api('start')).game; arrivingTiles = new Set(game.rack.map(tile => tile.id)); selected = []; message = ''; render(); }
+    try { busy = true; if (localRound()) game = { ...game, startedAt: Date.now() }; else game = (await api('start')).game; arrivingTiles = new Set(game.rack.map(tile => tile.id)); selected = []; message = ''; render(); await track(() => telemetry.startJourney()); }
     catch (error) { message = error.message; render(); } finally { busy = false; }
   });
   app.querySelector('#submit')?.addEventListener('click', async () => {
     try {
       busy = true;
       refreshSelection();
+      const previousBag = game.bag.length;
       const result = localRound() ? submitWord(game, selected) : await api('submit', { ids: selected });
       if (!result.error) arrivingTiles = new Set(result.game.rack.filter(tile => !game.rack.some(old => old.id === tile.id)).map(tile => tile.id));
       game = result.game; message = result.error || (result.game.words.at(-1)?.word?.toUpperCase() + ' accepted');
-      if (!result.error) selected = [];
+      if (!result.error) {
+        selected = [];
+        if (result.game.words.length === 1) await track(() => telemetry.progress({ progress: .25, action: 'first_word' }));
+        else await track(() => telemetry.interaction({ action: 'word_accepted' }));
+        if (previousBag > 0 && result.game.bagRemaining === 0) await track(() => telemetry.progress({ progress: .75, action: 'bag_empty' }));
+      }
       render();
+      if (game.endedAt !== null) { await reportEnd(); await refreshProfile(); render(); }
     } catch (error) { message = error.message; render(); } finally {
       busy = false;
       if (app.querySelector('#submit')) refreshSelection();
     }
   });
   app.querySelector('#finish')?.addEventListener('click', async () => {
-    try { game = localRound() ? finish(game) : (await api('finish')).game; selected = []; message = ''; render(); }
+    try { game = localRound() ? finish(game) : (await api('finish')).game; selected = []; message = ''; render(); await track(() => telemetry.interaction({ action: 'finish_early' })); await reportEnd(); await refreshProfile(); render(); }
     catch (error) { message = error.message; render(); }
   });
   app.querySelector('#replay')?.addEventListener('click', () => { game = createGame(seed, config); selected = []; message = ''; render(); });
@@ -170,6 +217,7 @@ function bind() {
 }
 
 document.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && leaderboardOpen) { leaderboardOpen = false; render(); app.querySelector('#leaderboard')?.focus(); return; }
   if (event.key === 'Tab' && infoOpen) {
     const controls = [...app.querySelectorAll('.info-dialog button')];
     const first = controls[0];
@@ -190,7 +238,16 @@ setInterval(() => {
   }
   if (!game?.startedAt || game.endedAt) return;
   const remaining = timeLeft(game);
-  if (remaining === 0) { game = finish(game); selected = []; render(); return; }
+  if (remaining === 0) {
+    if (localRound()) { game = finish(game); selected = []; render(); }
+    else if (!finalizing) {
+      finalizing = true;
+      api('finish').then(async data => { game = data.game; selected = []; render(); await reportEnd(); await refreshProfile(); render(); })
+        .catch(error => { message = error.message; render(); })
+        .finally(() => { finalizing = false; });
+    }
+    return;
+  }
   const count = app.querySelector('#time-count');
   const bar = app.querySelector('.timer span');
   if (count) count.textContent = remaining;

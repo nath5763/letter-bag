@@ -1,0 +1,11 @@
+const utcDay = time => new Date(time).toISOString().slice(0, 10);
+export const previousDay = day => utcDay(Date.parse(`${day}T00:00:00Z`) - 86400000);
+
+export function currentStreak(profile, day) {
+  return profile && (profile.lastDay === day || profile.lastDay === previousDay(day)) ? profile.current : 0;
+}
+
+export function nextProfile(profile, day) {
+  const current = profile?.lastDay === previousDay(day) ? profile.current + 1 : 1;
+  return { lastDay: day, current, best: Math.max(current, profile?.best || 0) };
+}

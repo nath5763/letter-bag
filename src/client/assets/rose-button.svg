@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 86" preserveAspectRatio="none">
+<defs><linearGradient id="rose" x2=".3" y2="1"><stop stop-color="#bf6971"/><stop offset=".55" stop-color="#ad5260"/><stop offset="1" stop-color="#92404f"/></linearGradient><filter id="soft"><feGaussianBlur stdDeviation="8"/></filter><filter id="grain"><feTurbulence type="fractalNoise" baseFrequency=".31" numOctaves="2" seed="9"/><feColorMatrix type="saturate" values="0"/><feComponentTransfer><feFuncA type="linear" slope=".19"/></feComponentTransfer></filter></defs>
+<path fill="url(#rose)" d="M0 0h500v86H0z"/>
+<g filter="url(#soft)" opacity=".3"><ellipse cx="103" cy="16" rx="126" ry="23" fill="#e3a196"/><ellipse cx="402" cy="63" rx="190" ry="28" fill="#693b51"/></g>
+<path fill="#ebc4b0" filter="url(#grain)" d="M0 0h500v86H0z"/>
+<path fill="none" stroke="#e4a8a0" stroke-width="1.5" opacity=".73" d="M12 7q239-2 477 0 5 0 5 6v60q0 6-6 6H12q-6 0-6-6V13q0-6 6-6z"/>
+<g fill="none" stroke="#f1d6bc" stroke-linecap="round" stroke-width="1.6" opacity=".72"><path d="M22 62Q36 53 44 34M31 53q-11-5-9-14 11 3 9 14m6-12q13-3 14-12-12-1-14 12M478 62q-15-8-22-28m11 18q11-5 10-13-11 2-10 13m-7-12q-12-3-13-12 11 1 13 12"/></g>
+</svg>

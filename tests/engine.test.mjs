@@ -29,6 +29,32 @@ test('seed repeats the same ordered puzzle and opening rack is playable', () => 
   })));
 });
 
+test('default puzzles keep twelve vowels across balanced rack and bag halves', () => {
+  const openingCounts = new Set();
+  for (let i = 0; i < 200; i++) {
+    const tiles = puzzle('balance-' + i);
+    const rackVowels = tiles.slice(0, 15).filter(tile => 'AEIOU'.includes(tile.letter)).length;
+    const bagVowels = tiles.slice(15).filter(tile => 'AEIOU'.includes(tile.letter)).length;
+    assert.equal(tiles.length, 30);
+    assert.equal(rackVowels + bagVowels, 12);
+    assert.equal(tiles.length - rackVowels - bagVowels, 18);
+    assert.ok(rackVowels >= 5 && rackVowels <= 7);
+    assert.ok(15 - rackVowels >= 8 && 15 - rackVowels <= 10);
+    assert.equal(bagVowels, 12 - rackVowels);
+    openingCounts.add(rackVowels);
+  }
+  assert.deepEqual([...openingCounts].sort(), [5, 6, 7]);
+});
+
+test('custom practice sizes keep the same approximate vowel ratio', () => {
+  for (const [rack, bag] of [[3, 0], [5, 2], [15, 0], [30, 60]]) {
+    const tiles = puzzle('custom-' + rack + '-' + bag, { rack, bag });
+    const vowels = tiles.filter(tile => 'AEIOU'.includes(tile.letter)).length;
+    assert.equal(tiles.length, rack + bag);
+    assert.equal(vowels, Math.round((rack + bag) * .4));
+  }
+});
+
 test('accepted word scores and consumes precise tiles in draw order', () => {
   const start = 1000;
   const game = createGame('example', {}, start);

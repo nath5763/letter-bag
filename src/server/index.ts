@@ -1,11 +1,14 @@
 import { Hono } from 'hono';
 import { serve } from '@hono/node-server';
 import { createServer, getServerPort, context, redis, reddit } from '@devvit/web/server';
+import { telemetry } from '@devvit/analytics/server/reddit';
 import { createGame, finish, publicGame, submitWord, timeLeft } from '../shared/engine.js';
 import { storedJson } from './stored-json.js';
+import { currentStreak, nextProfile } from './streak.js';
 
 const app = new Hono();
 type Game = ReturnType<typeof createGame>;
+type Profile = { lastDay: string; current: number; best: number };
 type PostRecord = { status: 'creating'; token: string; claimedAt: number } | { status: 'published'; postId: string };
 const utcDay = (time = Date.now()) => new Date(time).toISOString().slice(0, 10);
 const datedPost = () => {
@@ -14,6 +17,12 @@ const datedPost = () => {
 };
 const attemptKey = (day: string) => `attempt:${day}:${context.userId}`;
 const postKey = (day: string) => `daily-post:${day}`;
+const profileKey = (userId: string) => `profile:${userId}`;
+const completionKey = (day: string, userId: string) => `completion:${day}:${userId}`;
+const dailyKey = (day: string) => `leaderboard:daily:${day}`;
+const allTimeKey = 'leaderboard:all-time';
+const activeKey = 'rounds:active';
+const activeMember = (day: string, userId: string) => `${day}:${userId}`;
 const visible = (game: Game) => publicGame(game);
 const closed = (day: string | null) => day !== utcDay();
 
@@ -21,6 +30,39 @@ async function load(day: string | null) {
   if (!context.userId || !day) return null;
   const raw = await redis.get(attemptKey(day));
   return storedJson(raw) as Game | null;
+}
+
+async function playerProfile(day: string) {
+  if (!context.userId) return null;
+  const profile = storedJson(await redis.get(profileKey(context.userId))) as Profile | null;
+  return { current: currentStreak(profile, day), best: profile?.best || 0 };
+}
+
+async function commitResult(day: string, userId: string, current: Game | null, next: Game) {
+  const key = `attempt:${day}:${userId}`;
+  const marker = completionKey(day, userId);
+  const profileId = profileKey(userId);
+  for (let retry = 0; retry < 6; retry++) {
+    const tx = await redis.watch(key, marker, profileId);
+    const [rawGame, rawMarker, rawProfile] = await Promise.all([redis.get(key), redis.get(marker), redis.get(profileId)]);
+    if (JSON.stringify(storedJson(rawGame)) !== JSON.stringify(current)) { await tx.unwatch(); return false; }
+    const profile = storedJson(rawProfile) as Profile | null;
+    const qualifies = next.endedAt !== null && next.words.length > 0 && !rawMarker;
+    await tx.multi();
+    await tx.set(key, JSON.stringify(next));
+    if (next.endedAt !== null) await tx.zRem(activeKey, [activeMember(day, userId)]);
+    else if (current === null && next.startedAt !== null)
+      await tx.zAdd(activeKey, { member: activeMember(day, userId), score: next.startedAt + next.config.seconds * 1000 });
+    if (qualifies) {
+      await tx.set(marker, String(next.score));
+      await tx.set(profileId, JSON.stringify(nextProfile(profile, day) satisfies Profile));
+      await tx.zAdd(dailyKey(day), { member: userId, score: next.score });
+      await tx.zIncrBy(allTimeKey, userId, next.score);
+      await tx.expire(dailyKey(day), 90 * 86400);
+    }
+    if (await tx.exec() !== null) return true;
+  }
+  return false;
 }
 
 async function change(day: string | null, transform: (game: Game | null) => { game: Game; error?: string | null }) {
@@ -31,15 +73,19 @@ async function change(day: string | null, transform: (game: Game | null) => { ga
     const tx = await redis.watch(key);
     const raw = await redis.get(key);
     const current = storedJson(raw) as Game | null;
+    const expired = current?.startedAt !== null && current?.startedAt !== undefined && timeLeft(current) === 0 && current.endedAt === null;
+    if (expired) {
+      await tx.unwatch();
+      if (!await commitResult(day, context.userId, current, finish(current))) continue;
+      continue;
+    }
     const result = transform(current);
     if (result.error) {
       await tx.unwatch();
       return { status: 400, body: { game: visible(result.game), error: result.error } };
     }
-    await tx.multi();
-    await tx.set(key, JSON.stringify(result.game));
-    const committed = await tx.exec();
-    if (committed !== null) return { status: 200, body: { game: visible(result.game), error: null } };
+    await tx.unwatch();
+    if (await commitResult(day, context.userId, current, result.game)) return { status: 200, body: { game: visible(result.game), error: null } };
   }
   return { status: 409, body: { error: 'Round changed; try again' } };
 }
@@ -106,11 +152,49 @@ async function ensureTodayPost() {
 
 app.get('/api/state', async c => {
   const day = datedPost();
-  const game = await load(day) || createGame(day || utcDay());
+  let game = await load(day) || createGame(day || utcDay());
+  if (day && game.startedAt !== null && game.endedAt === null && timeLeft(game) === 0 && context.userId) {
+    await commitResult(day, context.userId, game, finish(game));
+    game = await load(day) || game;
+  }
   const postUrl = context.postId && context.subredditName
     ? `https://www.reddit.com/r/${context.subredditName}/comments/${context.postId.replace(/^t3_/, '')}/`
     : '';
-  return c.json({ game: visible(game), anonymous: !context.userId, closed: closed(day), postUrl });
+  return c.json({ game: visible(game), anonymous: !context.userId, closed: closed(day), postUrl, profile: await playerProfile(day || utcDay()) });
+});
+
+app.get('/api/leaderboard', async c => {
+  const day = datedPost() || utcDay();
+  const boards = await Promise.all([redis.zRange(dailyKey(day), 0, 9, { by: 'rank', reverse: true }), redis.zRange(allTimeKey, 0, 9, { by: 'rank', reverse: true })]);
+  const names = new Map<string, string>();
+  await Promise.all([...new Set(boards.flat().map(entry => entry.member))].map(async id => {
+    try { names.set(id, (await reddit.getUserById(id as `t2_${string}`))?.username || 'Reddit player'); }
+    catch { names.set(id, 'Reddit player'); }
+  }));
+  const rows = (board: typeof boards[number]) => board.map((entry, index) => ({ rank: index + 1, name: names.get(entry.member), score: entry.score }));
+  return c.json({ day, daily: rows(boards[0]), allTime: rows(boards[1]) });
+});
+
+// The analytics package's supplied router is Express-only; these Hono routes
+// expose the same client endpoints while keeping this server's Hono adapter.
+app.post('/api/telemetry/journey/app-ready', async c => c.json(await telemetry.appReady()));
+app.post('/api/telemetry/journey/start', async c => c.json(await telemetry.startJourney()));
+app.post('/api/telemetry/journey/progress', async c => {
+  const body = await c.req.json().catch(() => ({}));
+  if (typeof body.journeyId !== 'string' || typeof body.progress !== 'number' || body.progress < 0 || body.progress > 1)
+    return c.json({ error: 'Invalid progress event' }, 400);
+  return c.json(await telemetry.journeyProgress({ journeyId: body.journeyId, progress: body.progress, action: String(body.action || ''), actionDetails: '' }));
+});
+app.post('/api/telemetry/journey/interaction', async c => {
+  const body = await c.req.json().catch(() => ({}));
+  if (typeof body.journeyId !== 'string' || typeof body.action !== 'string') return c.json({ error: 'Invalid interaction event' }, 400);
+  return c.json(await telemetry.journeyInteraction({ journeyId: body.journeyId, action: body.action, actionDetails: '' }));
+});
+app.post('/api/telemetry/journey/end', async c => {
+  const body = await c.req.json().catch(() => ({}));
+  const game = await load(datedPost());
+  if (typeof body.journeyId !== 'string' || !game || game.endedAt === null) return c.json({ error: 'Round has not ended' }, 400);
+  return c.json(await telemetry.endJourney({ journeyId: body.journeyId, complete: true, game: { win: game.words.length > 0, score: game.score } }));
 });
 
 app.post('/api/start', async c => {
@@ -140,16 +224,28 @@ app.post('/api/finish', async c => {
   const day = datedPost();
   const result = await change(day, current => {
     if (!current) return { game: createGame(day!), error: 'Start the round first' };
-    if (closed(day) && timeLeft(current) === 0) return { game: current, error: 'This daily puzzle is closed' };
     return { game: finish(current) };
   });
   return c.json(result.body, result.status as 200);
 });
 
 app.post('/internal/scheduler/daily-post', async c => {
-  try { await ensureTodayPost(); return c.json({ status: 'ok' }); }
+  try { await ensureTodayPost(); await reconcileExpiredRounds(); return c.json({ status: 'ok' }); }
   catch (error) { console.error('Daily post check failed', error); return c.json({ status: 'error' }, 500); }
 });
+
+async function reconcileExpiredRounds() {
+  const due = await redis.zRange(activeKey, '-inf', Date.now(), { by: 'score', limit: { offset: 0, count: 100 } });
+  for (const entry of due) {
+    try {
+      const day = entry.member.slice(0, 10);
+      const userId = entry.member.slice(11);
+      const game = storedJson(await redis.get(`attempt:${day}:${userId}`)) as Game | null;
+      if (!game || game.endedAt !== null) { await redis.zRem(activeKey, [entry.member]); continue; }
+      await commitResult(day, userId, game, finish(game));
+    } catch (error) { console.error('Could not reconcile expired round', error); }
+  }
+}
 
 app.post('/internal/triggers/app-install', async c => {
   try { await ensureTodayPost(); }

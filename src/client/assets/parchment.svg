@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 1120" preserveAspectRatio="xMidYMid slice">
+<defs>
+<radialGradient id="paper"><stop stop-color="#fff7e7"/><stop offset=".66" stop-color="#f9ecda"/><stop offset="1" stop-color="#efd9cd"/></radialGradient>
+<filter id="grain"><feTurbulence type="fractalNoise" baseFrequency=".42" numOctaves="3" seed="12" stitchTiles="stitch"/><feColorMatrix type="saturate" values="0"/><feComponentTransfer><feFuncA type="linear" slope=".18"/></feComponentTransfer></filter>
+<filter id="bleed"><feGaussianBlur stdDeviation="16"/></filter><filter id="mountain"><feTurbulence type="fractalNoise" baseFrequency=".018" numOctaves="2" seed="13" result="noise"/><feDisplacementMap in="SourceGraphic" in2="noise" scale="7" xChannelSelector="R" yChannelSelector="G"/><feGaussianBlur stdDeviation="1.4"/></filter>
+</defs>
+<path fill="url(#paper)" d="M0 0h760v1120H0z"/>
+<g filter="url(#bleed)" opacity=".2"><ellipse cx="102" cy="202" rx="175" ry="225" fill="#d69a91"/><ellipse cx="637" cy="422" rx="182" ry="250" fill="#e2b3a5"/><ellipse cx="343" cy="715" rx="310" ry="210" fill="#f2d6ac"/><ellipse cx="640" cy="923" rx="236" ry="152" fill="#9f97ae"/></g>
+<path fill="#cf9292" opacity=".22" d="M0 0q58 24 126 5t125 8q72 38 148 11t152-5Q663 32 760 0v45q-80 29-160 6-83-10-157 21-90-26-182-4Q132 72 0 40z"/>
+<g filter="url(#mountain)"><path fill="#829dbe" opacity=".4" d="M0 1058q44-49 86-46 41-60 91-58 54 16 79 61 56-32 108 13 68-91 125-70 72-39 127 29 82-34 144 19v114H0z"/>
+<path fill="#7882aa" opacity=".42" d="M0 1080q47-25 82-24 38-50 80-36 55-34 107 22 56-18 107 13 57-52 101-31 59-31 126 25 71-9 157 18v53H0z"/>
+<path fill="#d9a5af" opacity=".3" d="M0 1069q95-34 155-2 63-33 116-4 78-46 142 18 67-49 148-7 92-34 199 8v38H0z"/></g>
+<path fill="#fff" filter="url(#grain)" d="M0 0h760v1120H0z"/>
+</svg>

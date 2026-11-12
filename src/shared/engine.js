@@ -2,6 +2,9 @@ import { WORDS } from './words.js';
 
 export const DEFAULTS = Object.freeze({ seconds: 90, rack: 15, bag: 15 });
 const LETTERS = 'AAAAAAAABCDEEEEEEEEEEEFGHIIIIIIJKLMNNOOOOOOOPQRRRRSSSSTTTTTTUUUVWYZ';
+const VOWELS = 'AEIOU';
+const VOWEL_POOL = [...LETTERS].filter(letter => VOWELS.includes(letter)).join('');
+const CONSONANT_POOL = [...LETTERS].filter(letter => !VOWELS.includes(letter)).join('');
 
 function hashSeed(value) {
   let h = 2166136261;
@@ -28,28 +31,60 @@ export function validateOptions(options = {}) {
   return result;
 }
 
+function shuffle(letters, rng) {
+  for (let i = letters.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [letters[i], letters[j]] = [letters[j], letters[i]];
+  }
+  return letters;
+}
+
 export function puzzle(seed, options = {}) {
   const config = validateOptions(options);
   const rng = random(seed);
   const count = config.rack + config.bag;
-  const letters = Array.from({ length: count }, () => LETTERS[Math.floor(rng() * LETTERS.length)]);
+  const totalVowels = Math.round(count * .4);
+  const rackTarget = Math.round(config.rack * .4);
+  const bagTarget = Math.round(config.bag * .4);
+  const vowelCount = word => [...word].filter(letter => VOWELS.includes(letter)).length;
+  const draw = pool => pool[Math.floor(rng() * pool.length)];
+
   const anchors = ['CAT', 'DOG', 'SUN', 'EAR', 'NOTE', 'STAR', 'RAIN', 'FIRE', 'GAME', 'LAMP'];
-  const playable = anchors.filter(word => word.length <= config.rack && WORDS.has(word.toLowerCase()));
+  const playable = anchors.filter(word =>
+    word.length <= config.rack && WORDS.has(word.toLowerCase()) &&
+    vowelCount(word) <= totalVowels && word.length - vowelCount(word) <= count - totalVowels);
   const anchor = playable[Math.floor(rng() * playable.length)] || 'CAT';
-  for (let i = 0; i < anchor.length; i++) letters[i] = anchor[i];
-  let vowels = letters.slice(0, config.rack).filter(ch => 'AEIOU'.includes(ch)).length;
-  const minimum = Math.max(1, Math.floor(config.rack * .25));
-  for (let i = anchor.length; i < config.rack && vowels < minimum; i++) {
-    if (!'AEIOU'.includes(letters[i])) { letters[i] = 'AEIOU'[Math.floor(rng() * 5)]; vowels++; }
-  }
-  for (let i = config.rack - 1; i > 0; i--) {
-    const j = Math.floor(rng() * (i + 1));
-    [letters[i], letters[j]] = [letters[j], letters[i]];
-  }
-  return letters.map((letter, id) => ({ id, letter }));
+  const anchorVowels = vowelCount(anchor);
+  const anchorConsonants = anchor.length - anchorVowels;
+
+  const possible = Array.from({ length: config.rack + 1 }, (_, vowels) => vowels).filter(vowels =>
+    vowels >= anchorVowels && config.rack - vowels >= anchorConsonants &&
+    totalVowels - vowels >= 0 && totalVowels - vowels <= config.bag);
+  const nearby = possible.filter(vowels =>
+    Math.abs(vowels - rackTarget) <= 1 &&
+    Math.abs(totalVowels - vowels - bagTarget) <= 1);
+  const choices = nearby.length ? nearby : [possible.reduce((best, vowels) =>
+    Math.abs(vowels - rackTarget) + Math.abs(totalVowels - vowels - bagTarget) <
+    Math.abs(best - rackTarget) + Math.abs(totalVowels - best - bagTarget) ? vowels : best)];
+  const weighted = choices.flatMap(vowels =>
+    Array.from({ length: vowels === rackTarget ? 2 : 1 }, () => vowels));
+  const rackVowels = weighted[Math.floor(rng() * weighted.length)];
+  const bagVowels = totalVowels - rackVowels;
+
+  // Keep one playable word in the opening rack, then shuffle both balanced halves.
+  const rack = shuffle([
+    ...anchor,
+    ...Array.from({ length: rackVowels - anchorVowels }, () => draw(VOWEL_POOL)),
+    ...Array.from({ length: config.rack - rackVowels - anchorConsonants }, () => draw(CONSONANT_POOL))
+  ], rng);
+  const bag = shuffle([
+    ...Array.from({ length: bagVowels }, () => draw(VOWEL_POOL)),
+    ...Array.from({ length: config.bag - bagVowels }, () => draw(CONSONANT_POOL))
+  ], rng);
+  return [...rack, ...bag].map((letter, id) => ({ id, letter }));
 }
 
-export function createGame(seed, options = {}, now = null) {
+export function createGame(seed, options = {}, now = /** @type {number | null} */ (null)) {
   const config = validateOptions(options);
   const tiles = puzzle(seed, config);
   return {

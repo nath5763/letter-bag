@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 270" preserveAspectRatio="none">
+<defs><linearGradient id="paint" x2=".8" y2="1"><stop stop-color="#a7645b"/><stop offset=".5" stop-color="#b87969"/><stop offset="1" stop-color="#8e5254"/></linearGradient><filter id="grain"><feTurbulence type="fractalNoise" baseFrequency=".22" numOctaves="2" seed="21"/><feColorMatrix type="saturate" values="0"/><feComponentTransfer><feFuncA type="linear" slope=".2"/></feComponentTransfer></filter><filter id="soft"><feGaussianBlur stdDeviation="7"/></filter></defs>
+<path fill="url(#paint)" d="M0 0h500v270H0z"/>
+<g opacity=".34" filter="url(#soft)"><path fill="#d49b81" d="M-20 14q112-14 169 22 72-33 172-13 97-22 201 17v51q-112-35-229 2-93-19-180 6Q62 81-20 119z"/><path fill="#763f49" d="M-21 153q101 37 194 11 101 31 175-5 86 18 169-3v96q-83-36-192 4-95-28-184 7-66-23-162 0z"/></g>
+<g fill="none" stroke="#6e4040" stroke-width="2" opacity=".2"><path d="M-10 33q81 16 150 1 68 18 126-1 122 24 245-7M-10 75q95-20 178 5 85-19 178-2 83-15 165 4M-10 139q104 18 196-4 95 17 176-4 66 12 149 2M-10 219q93-16 175 5 90-15 169 5 89-22 177 0"/></g>
+<path fill="#f4d1af" opacity=".16" d="M0 0h500v270H0z" filter="url(#grain)"/>
+<path fill="none" stroke="#e6b1a0" stroke-width="3" opacity=".68" d="M12 7q235 3 476 0 6 0 6 7v242q0 7-7 7H13q-7 0-7-7V15q0-8 6-8z"/>
+</svg>
