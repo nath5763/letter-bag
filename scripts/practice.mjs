@@ -4,11 +4,11 @@ import { resolve, extname } from 'node:path';
 import { validateOptions } from '../src/shared/engine.js';
 
 const raw = Object.fromEntries(process.argv.slice(2).map(part => {
-  const match = /^--(seed|seconds|rack|bag)=(.+)$/.exec(part);
+  const match = /^--(seed|rack|bag)=(.+)$/.exec(part);
   if (!match) throw Error(`Unknown argument: ${part}`);
   return [match[1], match[2]];
 }));
-const config = validateOptions(Object.fromEntries(['seconds', 'rack', 'bag'].filter(key => raw[key] !== undefined).map(key => [key, Number(raw[key])])));
+const config = validateOptions(Object.fromEntries(['rack', 'bag'].filter(key => raw[key] !== undefined).map(key => [key, Number(raw[key])])));
 const seed = raw.seed || `practice-${Date.now()}`;
 const port = 4173;
 const root = resolve('src');
@@ -35,5 +35,5 @@ http.createServer(async (req, res) => {
   }
 }).listen(port, '127.0.0.1', () => {
   console.log(`Practice: http://127.0.0.1:${port}/`);
-  console.log(`Seed: ${seed} | ${config.seconds}s | ${config.rack} rack | ${config.bag} bag`);
+  console.log(`Seed: ${seed} | ${config.rack} rack | ${config.bag} bag | no time limit`);
 });

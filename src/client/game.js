@@ -1,4 +1,4 @@
-import { createGame, finish, publicGame, submitWord, timeLeft } from '../shared/engine.js';
+import { createGame, finish, letterBonus, publicGame, scoreWord, submitWord } from '../shared/engine.js';
 import { resultCard } from '../shared/result.js';
 import { api } from './api.js';
 import { telemetry } from '@devvit/analytics/client/reddit';
@@ -19,8 +19,10 @@ let arrivingTiles = new Set();
 let profile = null;
 let leaderboard = null;
 let leaderboardOpen = false;
-let finalizing = false;
 const localRound = () => practice || anonymous;
+const tileFace = letter => `${letter}${letterBonus(letter) ? `<span class="tile-bonus" aria-hidden="true">${letterBonus(letter)}</span>` : ''}`;
+const wordPoints = () => scoreWord(selected.map(id => game.rack.find(tile => tile.id === id)?.letter || '').join(''));
+const pointsLabel = () => selected.length >= 3 ? `+${wordPoints().points} POINTS` : '3 LETTERS MINIMUM';
 async function track(call) {
   if (localRound()) return;
   try {
@@ -62,46 +64,43 @@ function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]);
 }
 
-function view() { return localRound() ? publicGame(game) : { ...game, remaining: game.startedAt ? Math.max(0, Math.ceil((game.startedAt + game.config.seconds * 1000 - Date.now()) / 1000)) : game.config.seconds }; }
+function view() { return localRound() ? publicGame(game) : game; }
 
 function render() {
   const state = view();
   const started = state.startedAt !== null;
-  const ended = state.endedAt !== null || (started && state.remaining === 0);
+  const ended = state.endedAt !== null;
   const active = started && !ended;
   const unavailable = !practice && !started && (closed || game.seed !== new Date().toISOString().slice(0, 10));
   const result = ended ? resultCard(game, { practice, anonymous, postUrl }) : null;
-  const word = selected.map(id => game.rack.find(tile => tile.id === id)?.letter || '').join('');
-  const pct = started ? Math.max(0, state.remaining / game.config.seconds * 100) : 100;
   const wordTiles = selected.map(id => {
     const letter = game.rack.find(tile => tile.id === id)?.letter || '';
-    return `<button type="button" class="chosen" data-remove="${id}" aria-label="Remove ${letter} from word">${letter}</button>`;
+    return `<button type="button" class="chosen" data-remove="${id}" aria-label="Remove ${letter} from word">${tileFace(letter)}</button>`;
   }).join('');
   app.innerHTML = `
     <header class="topline"><span class="brand">DAILY LETTER BAG</span><div class="top-actions"><span class="mode">${practice ? 'PRACTICE' : `GAME #${escapeHtml(game.seed.replaceAll('-', ''))}`}</span>${!started ? '<button type="button" class="info-button" id="info" aria-haspopup="dialog">How to play</button>' : ''}</div></header>
-    <section class="dashboard"><div><span class="label">SCORE</span><strong>${state.score}</strong></div><div><span class="label">TIME</span><strong id="time-value" class="${state.remaining <= 10 && active ? 'urgent' : ''}"><span id="time-count">${state.remaining}</span><small>s</small></strong></div><div><span class="label">BAG</span><strong>${state.bagRemaining}</strong></div></section>
-    <div class="timer" aria-hidden="true"><span style="width:${pct}%"></span></div>
+    <section class="dashboard"><div><span class="label">SCORE</span><strong>${state.score}</strong></div><div><span class="label">BAG</span><strong>${state.bagRemaining}</strong></div></section>
     <section class="tabletop">
-    ${ended ? `<section class="result-stage"><div class="result-card" aria-label="${escapeHtml(result.label)}"><div class="result-card-top"><span class="label">${escapeHtml(result.label)}</span><span class="result-number">${result.gameNumber ? `GAME #${result.gameNumber}` : 'PRACTICE'}</span></div><strong>${state.score}</strong><span class="result-score-label">POINTS</span><div class="result-stats"><div><b>${result.wordCount}</b><span>WORDS</span></div><div><b>${result.longest}</b><span>LONGEST WORD</span></div></div><p>Copy this summary without revealing any letters or words.</p><div class="result-actions"><button type="button" class="primary" id="copy-result">Copy result</button></div></div>${state.words.length ? `<section class="history"><div class="section-head"><span>WORDS PLAYED</span><span>${state.words.length}</span></div><div class="word-list">${[...state.words].reverse().map(entry => `<div><span>${escapeHtml(entry.word)}</span><b>+${entry.points}</b></div>`).join('')}</div></section>` : ''}</section>` : `
-    <div class="bag-row"><div class="bag-scene" aria-hidden="true"><div class="draw-bag"></div></div><section class="preview-area"><div class="section-head"><span>UP NEXT</span></div><div class="preview">${state.bag.map(tile => `<span class="preview-tile ${!started ? 'masked' : ''}">${started ? tile.letter : '?'}</span>`).join('') || '<span class="empty">The bag is empty</span>'}</div></section></div>
-      ${active ? `<section class="compose"><div class="section-head"><span>YOUR WORD</span><span id="word-points">${word.length >= 3 ? `+${1 + word.length * (word.length + 1) / 2} POINTS` : '3 LETTERS MINIMUM'}</span></div><div class="word-controls"><div class="wordline">${wordTiles || '<span>Tap letters to form a word</span>'}</div><button type="button" class="back-button" id="back" ${!selected.length ? 'disabled' : ''} aria-label="Remove last letter">&larr; Back</button></div></section>` : '<section class="opening-copy"><div class="section-head"><span>YOUR WORD</span></div><p>Find as many words as you can before time runs out.</p></section>'}
-      <section class="play-area"><div class="section-head"><span>YOUR LETTERS</span><span>${game.rack.length} AVAILABLE</span></div><div class="rack">${game.rack.map((tile, index) => `<button type="button" class="tile ${!started ? 'masked' : ''} ${selected.includes(tile.id) ? 'picked' : ''} ${arrivingTiles.has(tile.id) ? 'drawn' : ''}" style="--draw-index:${index}" data-tile="${tile.id}" ${!active || selected.includes(tile.id) ? 'disabled' : ''} aria-label="${started ? `Letter ${tile.letter}` : 'Hidden letter'}">${started ? tile.letter : '?'}</button>`).join('')}</div></section>
-    <section class="round-actions"><div class="actions">${!started ? unavailable ? '<div class="end-card"><span class="label">PUZZLE CLOSED</span><p>This daily puzzle is closed. Open today\'s post to play.</p></div>' : '<button type="button" class="primary" id="start">Start</button>' : `<button type="button" class="primary" id="submit" ${selected.length < 3 || busy ? 'disabled' : ''}>Play word</button><button type="button" class="secondary" id="clear" ${!selected.length ? 'disabled' : ''}>Clear</button><button type="button" class="text-button" id="finish">Finish early</button>`}</div></section>`}
+    ${ended ? `<section class="result-stage"><div class="result-card" aria-label="${escapeHtml(result.label)}"><div class="result-card-top"><span class="label">${escapeHtml(result.label)}</span><span class="result-number">${result.gameNumber ? `GAME #${result.gameNumber}` : 'PRACTICE'}</span></div><strong>${state.score}</strong><span class="result-score-label">POINTS</span><div class="result-stats"><div><b>${result.wordCount}</b><span>WORDS</span></div><div><b>${result.longest}</b><span>LONGEST WORD</span></div></div><p>Copy this summary without revealing any letters or words.</p><div class="result-actions"><button type="button" class="primary" id="copy-result">Copy result</button></div></div>${state.words.length ? `<section class="history"><div class="section-head"><span>WORDS PLAYED</span><span>${state.words.length}</span></div><div class="word-list">${[...state.words].reverse().map(entry => `<div><span>${escapeHtml(entry.word)}</span><b>+${entry.points}${entry.bonusPoints ? ` <small>(${entry.basePoints} base + ${entry.bonusPoints} bonus)</small>` : ''}</b></div>`).join('')}</div></section>` : ''}</section>` : `
+    <div class="bag-row"><div class="bag-scene" aria-hidden="true"><div class="draw-bag"></div></div><section class="preview-area"><div class="section-head"><span>UP NEXT</span></div><div class="preview">${state.bag.map(tile => `<span class="preview-tile ${!started ? 'masked' : ''}">${started ? tileFace(tile.letter) : '?'}</span>`).join('') || '<span class="empty">The bag is empty</span>'}</div></section></div>
+      ${active ? `<section class="compose"><div class="section-head"><span>YOUR WORD</span><span id="word-points">${pointsLabel()}</span></div><div class="word-controls"><div class="wordline">${wordTiles || '<span>Tap letters to form a word</span>'}</div><button type="button" class="back-button" id="back" ${!selected.length ? 'disabled' : ''} aria-label="Remove last letter">&larr; Back</button></div></section>` : '<section class="opening-copy"><div class="section-head"><span>YOUR WORD</span></div><p>Make words from your 30 letters. There is no time limit.</p></section>'}
+      <section class="play-area"><div class="section-head"><span>YOUR LETTERS</span><span>${game.rack.length} AVAILABLE</span></div><div class="rack">${game.rack.map((tile, index) => `<button type="button" class="tile ${!started ? 'masked' : ''} ${selected.includes(tile.id) ? 'picked' : ''} ${arrivingTiles.has(tile.id) ? 'drawn' : ''}" style="--draw-index:${index}" data-tile="${tile.id}" ${!active || selected.includes(tile.id) ? 'disabled' : ''} aria-label="${started ? `Letter ${tile.letter}${letterBonus(tile.letter) ? `, ${letterBonus(tile.letter)} bonus points` : ''}` : 'Hidden letter'}">${started ? tileFace(tile.letter) : '?'}</button>`).join('')}</div></section>
+    <section class="round-actions"><div class="actions">${!started ? unavailable ? '<div class="end-card"><span class="label">PUZZLE CLOSED</span><p>This daily puzzle is closed. Open today\'s post to play.</p></div>' : '<button type="button" class="primary" id="start">Start</button>' : `<button type="button" class="primary" id="submit" ${selected.length < 3 || busy ? 'disabled' : ''}>Play word</button><button type="button" class="secondary" id="clear" ${!selected.length ? 'disabled' : ''}>Clear</button><button type="button" class="text-button" id="finish">Finish</button>`}</div></section>`}
     <div class="feedback" role="status">${escapeHtml(message)}</div>
     </section>
     ${practice && !active ? `<footer class="practice-tools"><button id="replay">Replay seed</button><button id="new">New puzzle</button><span>Local practice &middot; unlimited attempts</span></footer>` : ''}
-    ${infoOpen && !started ? `<div class="info-backdrop" id="info-backdrop"><section class="info-dialog" role="dialog" aria-modal="true" aria-labelledby="info-title"><button type="button" class="info-close" id="info-close" aria-label="Close instructions">&times;</button><span class="label">HOW TO PLAY</span><h2 id="info-title">Daily Letter Bag</h2><ul><li>You have ${game.config.seconds} seconds to make as many words as you can.</li><li>A standard 30-letter puzzle has 12 vowels and 18 consonants. Each half starts near 6 vowels and 9 consonants.</li><li>Tap at least 3 wooden letters to form a word, then tap Play word.</li><li>Used letters leave your rack. The bag replaces them in order until it is empty; the next five letters appear in the preview.</li><li>Each word scores 1 point plus 1, 2, 3, and so on for each letter position. A 3-letter word earns 7 points.</li><li>A word can score once per round. Invalid words do not use letters.</li>${practice ? '' : '<li>Signed-in players get one scored attempt per UTC day.</li>'}</ul><button type="button" class="primary" id="info-done">Got it</button></section></div>` : ''}`;
+    ${infoOpen && !started ? `<div class="info-backdrop" id="info-backdrop"><section class="info-dialog" role="dialog" aria-modal="true" aria-labelledby="info-title"><button type="button" class="info-close" id="info-close" aria-label="Close instructions">&times;</button><span class="label">HOW TO PLAY</span><h2 id="info-title">Daily Letter Bag</h2><ul><li>You have 30 letters. Start with 15 in your rack; used letters are replaced from the bag in order.</li><li>The next five letters are visible, so you can plan ahead.</li><li>Tap at least 3 wooden letters to form a word, then tap Play word.</li><li>Longer words earn progressively more points: 1 plus 1, 2, 3, and so on. A 3-letter word earns 7 base points.</li><li>Rare letters add bonus points for each tile: Q and Z earn 2; J, X, K, and V earn 1.</li><li>There is no time limit. Earn the highest possible score from your available letters, then choose Finish.</li><li>A word can score once per round. Invalid words do not use letters.</li>${practice ? '' : '<li>Signed-in players get one scored attempt per UTC day.</li>'}</ul><button type="button" class="primary" id="info-done">Got it</button></section></div>` : ''}`;
   if (!started && profile) app.querySelector('.opening-copy')?.insertAdjacentHTML('beforeend', `<p class="streak-note">Current streak: ${profile.current} ${profile.current === 1 ? 'day' : 'days'} · Best: ${profile.best}</p>`);
   if (infoOpen && !practice) app.querySelector('.info-dialog ul')?.insertAdjacentHTML('beforeend', '<li>Finish a signed-in daily round with at least one valid word to grow your UTC-day streak and enter the community leaderboards.</li>');
   if (ended && !localRound()) app.querySelector('.result-actions')?.insertAdjacentHTML('beforeend', '<button type="button" class="secondary" id="leaderboard">Leaderboards</button>');
-  if (leaderboardOpen) app.insertAdjacentHTML('beforeend', `<div class="info-backdrop" id="leaderboard-backdrop"><section class="info-dialog leaderboard-dialog" role="dialog" aria-modal="true" aria-labelledby="leaderboard-title"><button type="button" class="info-close" id="leaderboard-close" aria-label="Close leaderboards">&times;</button><span class="label">COMMUNITY STANDINGS</span><h2 id="leaderboard-title">Leaderboards</h2>${leaderboard ? `<h3>Today · ${escapeHtml(leaderboard.day)}</h3>${boardHtml(leaderboard.daily)}<h3>All time · total points</h3>${boardHtml(leaderboard.allTime)}` : '<p>Loading standings…</p>'}</section></div>`);
+  if (leaderboardOpen) app.insertAdjacentHTML('beforeend', `<div class="info-backdrop" id="leaderboard-backdrop"><section class="info-dialog leaderboard-dialog" role="dialog" aria-modal="true" aria-labelledby="leaderboard-title"><button type="button" class="info-close" id="leaderboard-close" aria-label="Close leaderboards">&times;</button><span class="label">COMMUNITY STANDINGS</span><h2 id="leaderboard-title">Leaderboards</h2>${leaderboard ? `<h3>Today · ${escapeHtml(leaderboard.day)}</h3><p>Highest points first; fewer words break a points tie.</p>${boardHtml(leaderboard.daily, true)}<h3>All time · total points</h3>${boardHtml(leaderboard.allTime)}` : '<p>Loading standings…</p>'}</section></div>`);
   arrivingTiles = new Set();
   bind();
   if (infoOpen && !started) app.querySelector('#info-close')?.focus();
 }
 
-function boardHtml(rows) {
-  return rows.length ? `<ol class="leaderboard-list">${rows.map(row => `<li><span>${row.rank}. ${escapeHtml(row.name)}</span><b>${row.score}</b></li>`).join('')}</ol>` : '<p>No qualifying rounds yet.</p>';
+function boardHtml(rows, showWords = false) {
+  return rows.length ? `<ol class="leaderboard-list">${rows.map(row => `<li><span>${row.rank}. ${escapeHtml(row.name)}</span><b>${row.score}${showWords && row.wordCount !== undefined ? ` <small>(${row.wordCount} words)</small>` : ''}</b></li>`).join('')}</ol>` : '<p>No qualifying rounds yet.</p>';
 }
 
 function refreshSelection() {
@@ -113,10 +112,10 @@ function refreshSelection() {
   const wordline = app.querySelector('.wordline');
   wordline.innerHTML = selected.map(id => {
     const letter = game.rack.find(tile => tile.id === id)?.letter || '';
-    return `<button type="button" class="chosen" data-remove="${id}" title="Tap to remove this letter" aria-label="Remove ${letter} from word">${letter}</button>`;
+    return `<button type="button" class="chosen" data-remove="${id}" title="Tap to remove this letter" aria-label="Remove ${letter} from word">${tileFace(letter)}</button>`;
   }).join('') || '<span>Tap letters to form a word</span>';
   const length = selected.length;
-  app.querySelector('#word-points').textContent = length >= 3 ? `+${1 + length * (length + 1) / 2} POINTS` : '3 LETTERS MINIMUM';
+  app.querySelector('#word-points').textContent = pointsLabel();
   app.querySelector('#back').disabled = !length || busy;
   app.querySelector('#clear').disabled = !length || busy;
   app.querySelector('#submit').disabled = length < 3 || busy;
@@ -194,14 +193,16 @@ function bind() {
       const previousBag = game.bag.length;
       const result = localRound() ? submitWord(game, selected) : await api('submit', { ids: selected });
       if (!result.error) arrivingTiles = new Set(result.game.rack.filter(tile => !game.rack.some(old => old.id === tile.id)).map(tile => tile.id));
-      game = result.game; message = result.error || (result.game.words.at(-1)?.word?.toUpperCase() + ' accepted');
+      game = result.game;
+      const played = result.game.words.at(-1);
+      message = result.error || `${played.word.toUpperCase()} accepted: +${played.points} points${played.bonusPoints ? ` (${played.basePoints} base + ${played.bonusPoints} letter bonus)` : ''}.`;
       if (!result.error) {
         selected = [];
+        render();
         if (result.game.words.length === 1) await track(() => telemetry.progress({ progress: .25, action: 'first_word' }));
         else await track(() => telemetry.interaction({ action: 'word_accepted' }));
         if (previousBag > 0 && result.game.bagRemaining === 0) await track(() => telemetry.progress({ progress: .75, action: 'bag_empty' }));
-      }
-      render();
+      } else render();
       if (game.endedAt !== null) { await reportEnd(); await refreshProfile(); render(); }
     } catch (error) { message = error.message; render(); } finally {
       busy = false;
@@ -209,7 +210,7 @@ function bind() {
     }
   });
   app.querySelector('#finish')?.addEventListener('click', async () => {
-    try { game = localRound() ? finish(game) : (await api('finish')).game; selected = []; message = ''; render(); await track(() => telemetry.interaction({ action: 'finish_early' })); await reportEnd(); await refreshProfile(); render(); }
+    try { game = localRound() ? finish(game) : (await api('finish')).game; selected = []; message = ''; render(); await track(() => telemetry.interaction({ action: 'finish' })); await reportEnd(); await refreshProfile(); render(); }
     catch (error) { message = error.message; render(); }
   });
   app.querySelector('#replay')?.addEventListener('click', () => { game = createGame(seed, config); selected = []; message = ''; render(); });
@@ -234,24 +235,7 @@ document.addEventListener('keydown', event => {
 
 setInterval(() => {
   if (!practice && game && !game.startedAt && game.seed !== new Date().toISOString().slice(0, 10) && !closed) {
-    closed = true; render(); return;
+    closed = true; render();
   }
-  if (!game?.startedAt || game.endedAt) return;
-  const remaining = timeLeft(game);
-  if (remaining === 0) {
-    if (localRound()) { game = finish(game); selected = []; render(); }
-    else if (!finalizing) {
-      finalizing = true;
-      api('finish').then(async data => { game = data.game; selected = []; render(); await reportEnd(); await refreshProfile(); render(); })
-        .catch(error => { message = error.message; render(); })
-        .finally(() => { finalizing = false; });
-    }
-    return;
-  }
-  const count = app.querySelector('#time-count');
-  const bar = app.querySelector('.timer span');
-  if (count) count.textContent = remaining;
-  if (bar) bar.style.width = `${remaining / game.config.seconds * 100}%`;
-  app.querySelector('#time-value')?.classList.toggle('urgent', remaining <= 10);
-}, 200);
+}, 60_000);
 init();

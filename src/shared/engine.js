@@ -1,6 +1,13 @@
 import { WORDS } from './words.js';
 
-export const DEFAULTS = Object.freeze({ seconds: 90, rack: 15, bag: 15 });
+export const DEFAULTS = Object.freeze({ rack: 15, bag: 15 });
+export const LETTER_BONUSES = Object.freeze({ Q: 2, Z: 2, J: 1, X: 1, K: 1, V: 1 });
+export const letterBonus = letter => LETTER_BONUSES[letter.toUpperCase()] || 0;
+export function scoreWord(word) {
+  const basePoints = 1 + word.length * (word.length + 1) / 2;
+  const bonusPoints = [...word].reduce((total, letter) => total + letterBonus(letter), 0);
+  return { basePoints, bonusPoints, points: basePoints + bonusPoints };
+}
 const LETTERS = 'AAAAAAAABCDEEEEEEEEEEEFGHIIIIIIJKLMNNOOOOOOOPQRRRRSSSSTTTTTTUUUVWYZ';
 const VOWELS = 'AEIOU';
 const VOWEL_POOL = [...LETTERS].filter(letter => VOWELS.includes(letter)).join('');
@@ -24,8 +31,7 @@ function random(seed) {
 }
 
 export function validateOptions(options = {}) {
-  const result = { ...DEFAULTS, ...options };
-  if (!Number.isInteger(result.seconds) || result.seconds < 5 || result.seconds > 600) throw Error('seconds must be 5–600');
+  const result = { rack: options.rack ?? DEFAULTS.rack, bag: options.bag ?? DEFAULTS.bag };
   if (!Number.isInteger(result.rack) || result.rack < 3 || result.rack > 30) throw Error('rack must be 3–30');
   if (!Number.isInteger(result.bag) || result.bag < 0 || result.bag > 60) throw Error('bag must be 0–60');
   return result;
@@ -94,46 +100,40 @@ export function createGame(seed, options = {}, now = /** @type {number | null} *
   };
 }
 
-export function timeLeft(game, now = Date.now()) {
-  if (game.startedAt === null) return game.config.seconds;
-  return Math.max(0, Math.ceil((game.startedAt + game.config.seconds * 1000 - now) / 1000));
-}
-
 export function finish(game, now = Date.now()) {
   if (game.endedAt !== null) return game;
-  return { ...game, endedAt: Math.min(now, game.startedAt + game.config.seconds * 1000) };
+  return { ...game, endedAt: now };
 }
 
 export function submitWord(game, ids, now = Date.now()) {
-  if (game.startedAt === null || game.endedAt !== null || timeLeft(game, now) === 0) return { game: finish(game, now), error: 'Round has ended' };
+  if (game.startedAt === null) return { game, error: 'Start the round first' };
+  if (game.endedAt !== null) return { game, error: 'Round has ended' };
   if (!Array.isArray(ids) || ids.length < 3 || new Set(ids).size !== ids.length) return { game, error: 'Select at least three different tiles' };
   const chosen = ids.map(id => game.rack.find(tile => tile.id === id));
   if (chosen.some(tile => !tile)) return { game, error: 'Those tiles are no longer in the rack' };
   const word = chosen.map(tile => tile.letter).join('').toLowerCase();
   if (game.words.some(entry => entry.word === word)) return { game, error: 'Already played' };
   if (!WORDS.has(word)) return { game, error: 'Not in the word list' };
+  const scoring = scoreWord(word);
   const consumed = new Set(ids);
   const drawn = game.bag.slice(0, ids.length);
   const next = {
     ...game,
     rack: [...game.rack.filter(tile => !consumed.has(tile.id)), ...drawn].sort((a, b) => a.id - b.id),
     bag: game.bag.slice(drawn.length),
-    words: [...game.words, { word, points: 1 + ids.length * (ids.length + 1) / 2 }],
-    score: game.score + 1 + ids.length * (ids.length + 1) / 2
+    words: [...game.words, { word, ...scoring }],
+    score: game.score + scoring.points
   };
   if (next.rack.length < 3) next.endedAt = now;
   return { game: next, error: null };
 }
 
-export function publicGame(game, now = Date.now()) {
-  const expired = game.startedAt !== null && timeLeft(game, now) === 0;
-  const current = expired ? finish(game, now) : game;
-  const hidden = current.startedAt === null;
+export function publicGame(game) {
+  const hidden = game.startedAt === null;
   return {
-    ...current,
-    rack: hidden ? current.rack.map(tile => ({ ...tile, letter: '?' })) : current.rack,
-    bag: current.bag.slice(0, 5).map(tile => hidden ? { ...tile, letter: '?' } : tile),
-    bagRemaining: current.bag.length,
-    remaining: timeLeft(current, now)
+    ...game,
+    rack: hidden ? game.rack.map(tile => ({ ...tile, letter: '?' })) : game.rack,
+    bag: game.bag.slice(0, 5).map(tile => hidden ? { ...tile, letter: '?' } : tile),
+    bagRemaining: game.bag.length
   };
 }

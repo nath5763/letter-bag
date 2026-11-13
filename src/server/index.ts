@@ -2,9 +2,10 @@ import { Hono } from 'hono';
 import { serve } from '@hono/node-server';
 import { createServer, getServerPort, context, redis, reddit } from '@devvit/web/server';
 import { telemetry } from '@devvit/analytics/server/reddit';
-import { createGame, finish, publicGame, submitWord, timeLeft } from '../shared/engine.js';
+import { createGame, finish, publicGame, submitWord } from '../shared/engine.js';
 import { storedJson } from './stored-json.js';
 import { currentStreak, nextProfile } from './streak.js';
+import { rankRows } from './ranking.js';
 
 const app = new Hono();
 type Game = ReturnType<typeof createGame>;
@@ -21,8 +22,6 @@ const profileKey = (userId: string) => `profile:${userId}`;
 const completionKey = (day: string, userId: string) => `completion:${day}:${userId}`;
 const dailyKey = (day: string) => `leaderboard:daily:${day}`;
 const allTimeKey = 'leaderboard:all-time';
-const activeKey = 'rounds:active';
-const activeMember = (day: string, userId: string) => `${day}:${userId}`;
 const visible = (game: Game) => publicGame(game);
 const closed = (day: string | null) => day !== utcDay();
 
@@ -50,9 +49,6 @@ async function commitResult(day: string, userId: string, current: Game | null, n
     const qualifies = next.endedAt !== null && next.words.length > 0 && !rawMarker;
     await tx.multi();
     await tx.set(key, JSON.stringify(next));
-    if (next.endedAt !== null) await tx.zRem(activeKey, [activeMember(day, userId)]);
-    else if (current === null && next.startedAt !== null)
-      await tx.zAdd(activeKey, { member: activeMember(day, userId), score: next.startedAt + next.config.seconds * 1000 });
     if (qualifies) {
       await tx.set(marker, String(next.score));
       await tx.set(profileId, JSON.stringify(nextProfile(profile, day) satisfies Profile));
@@ -73,12 +69,6 @@ async function change(day: string | null, transform: (game: Game | null) => { ga
     const tx = await redis.watch(key);
     const raw = await redis.get(key);
     const current = storedJson(raw) as Game | null;
-    const expired = current?.startedAt !== null && current?.startedAt !== undefined && timeLeft(current) === 0 && current.endedAt === null;
-    if (expired) {
-      await tx.unwatch();
-      if (!await commitResult(day, context.userId, current, finish(current))) continue;
-      continue;
-    }
     const result = transform(current);
     if (result.error) {
       await tx.unwatch();
@@ -152,11 +142,7 @@ async function ensureTodayPost() {
 
 app.get('/api/state', async c => {
   const day = datedPost();
-  let game = await load(day) || createGame(day || utcDay());
-  if (day && game.startedAt !== null && game.endedAt === null && timeLeft(game) === 0 && context.userId) {
-    await commitResult(day, context.userId, game, finish(game));
-    game = await load(day) || game;
-  }
+  const game = await load(day) || createGame(day || utcDay());
   const postUrl = context.postId && context.subredditName
     ? `https://www.reddit.com/r/${context.subredditName}/comments/${context.postId.replace(/^t3_/, '')}/`
     : '';
@@ -165,14 +151,21 @@ app.get('/api/state', async c => {
 
 app.get('/api/leaderboard', async c => {
   const day = datedPost() || utcDay();
-  const boards = await Promise.all([redis.zRange(dailyKey(day), 0, 9, { by: 'rank', reverse: true }), redis.zRange(allTimeKey, 0, 9, { by: 'rank', reverse: true })]);
+  const boards = await Promise.all([redis.zRange(dailyKey(day), 0, -1, { by: 'rank', reverse: true }), redis.zRange(allTimeKey, 0, -1, { by: 'rank', reverse: true })]);
+  const dailyWithWords = await Promise.all(boards[0].map(async entry => {
+    const saved = storedJson(await redis.get(`attempt:${day}:${entry.member}`)) as Game | null;
+    return { ...entry, wordCount: saved?.words?.length };
+  }));
+  const dailyRanked = rankRows(dailyWithWords);
+  const allTimeRanked = rankRows(boards[1]);
   const names = new Map<string, string>();
-  await Promise.all([...new Set(boards.flat().map(entry => entry.member))].map(async id => {
+  await Promise.all([...new Set([...dailyRanked, ...allTimeRanked].map(entry => entry.member))].map(async id => {
     try { names.set(id, (await reddit.getUserById(id as `t2_${string}`))?.username || 'Reddit player'); }
     catch { names.set(id, 'Reddit player'); }
   }));
-  const rows = (board: typeof boards[number]) => board.map((entry, index) => ({ rank: index + 1, name: names.get(entry.member), score: entry.score }));
-  return c.json({ day, daily: rows(boards[0]), allTime: rows(boards[1]) });
+  const rows = (board: { member: string; score: number; rank: number; wordCount?: number }[]) =>
+    board.map(entry => ({ rank: entry.rank, name: names.get(entry.member), score: entry.score, ...(entry.wordCount === undefined ? {} : { wordCount: entry.wordCount }) }));
+  return c.json({ day, daily: rows(dailyRanked), allTime: rows(allTimeRanked) });
 });
 
 // The analytics package's supplied router is Express-only; these Hono routes
@@ -213,7 +206,7 @@ app.post('/api/submit', async c => {
   const body = await c.req.json().catch(() => ({}));
   const result = await change(day, current => {
     if (!current) return { game: createGame(day!), error: 'Start the round first' };
-    // A round started before midnight may finish within its original time limit.
+    // A daily attempt may continue after midnight, but only if it began on its puzzle day.
     if (utcDay(current.startedAt!) !== day) return { game: current, error: 'This daily puzzle is closed' };
     return submitWord(current, body.ids, Date.now());
   });
@@ -230,22 +223,9 @@ app.post('/api/finish', async c => {
 });
 
 app.post('/internal/scheduler/daily-post', async c => {
-  try { await ensureTodayPost(); await reconcileExpiredRounds(); return c.json({ status: 'ok' }); }
+  try { await ensureTodayPost(); return c.json({ status: 'ok' }); }
   catch (error) { console.error('Daily post check failed', error); return c.json({ status: 'error' }, 500); }
 });
-
-async function reconcileExpiredRounds() {
-  const due = await redis.zRange(activeKey, '-inf', Date.now(), { by: 'score', limit: { offset: 0, count: 100 } });
-  for (const entry of due) {
-    try {
-      const day = entry.member.slice(0, 10);
-      const userId = entry.member.slice(11);
-      const game = storedJson(await redis.get(`attempt:${day}:${userId}`)) as Game | null;
-      if (!game || game.endedAt !== null) { await redis.zRem(activeKey, [entry.member]); continue; }
-      await commitResult(day, userId, game, finish(game));
-    } catch (error) { console.error('Could not reconcile expired round', error); }
-  }
-}
 
 app.post('/internal/triggers/app-install', async c => {
   try { await ensureTodayPost(); }

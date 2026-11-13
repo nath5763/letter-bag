@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createGame, finish, puzzle, publicGame, submitWord, timeLeft } from '../src/shared/engine.js';
+import { createGame, finish, letterBonus, puzzle, publicGame, scoreWord, submitWord } from '../src/shared/engine.js';
 import { WORDS } from '../src/shared/words.js';
 
 test('broad lexicon includes reported words and inflections', () => {
@@ -68,18 +68,47 @@ test('accepted word scores and consumes precise tiles in draw order', () => {
   });
   const result = submitWord(game, ids, start + 1000);
   assert.equal(result.error, null);
-  assert.equal(result.game.score, 1 + word.length * (word.length + 1) / 2);
+  assert.equal(result.game.score, scoreWord(word).points);
+  assert.deepEqual(result.game.words[0], { word, ...scoreWord(word) });
   assert.deepEqual(result.game.bag, game.bag.slice(word.length));
   assert.deepEqual(result.game.rack.map(t => t.id), [...game.rack.filter(t => !used.has(t.id)), ...game.bag.slice(0, word.length)].sort((a,b) => a.id-b.id).map(t => t.id));
   assert.deepEqual(publicGame(result.game).bag, result.game.bag.slice(0, 5));
   assert.equal(submitWord(result.game, ids, start + 2000).error, 'Those tiles are no longer in the rack');
 });
 
-test('invalid and expired submissions do not score', () => {
-  const game = createGame('example', { seconds: 5 }, 1000);
+test('progressive scoring and every occurrence of a rare letter', () => {
+  for (const [word, points] of Object.entries({ CAT: 7, JAM: 8, ZIP: 9, JAZZ: 16, QUIZ: 15, PLANT: 16 })) {
+    assert.equal(scoreWord(word).points, points, word);
+    assert.equal(scoreWord(word).basePoints, 1 + word.length * (word.length + 1) / 2);
+  }
+  assert.equal(scoreWord('JAZZ').bonusPoints, 5);
+  assert.equal(scoreWord('jazz').bonusPoints, 5);
+  for (const [letter, bonus] of Object.entries({ Q: 2, Z: 2, J: 1, X: 1, K: 1, V: 1, A: 0 }))
+    assert.equal(letterBonus(letter), bonus);
+});
+
+test('a valid word receives its base and duplicate-letter bonus in the saved result', () => {
+  const original = createGame('bonus', {}, 1000);
+  const game = { ...original, rack: 'JAZZ'.split('').map((letter, id) => ({ letter, id })), bag: [] };
+  const result = submitWord(game, [0, 1, 2, 3], 900000);
+  assert.equal(result.error, null);
+  assert.deepEqual(result.game.words[0], { word: 'jazz', basePoints: 11, bonusPoints: 5, points: 16 });
+  assert.equal(result.game.score, 16);
+  assert.equal(result.game.endedAt, 900000);
+});
+
+test('no clock expiry or lack of an immediate word ends a round; Finish ends it explicitly', () => {
+  const game = createGame('example', {}, 1000);
+  assert.deepEqual(game.config, { rack: 15, bag: 15 });
+  assert.deepEqual(createGame('legacy', { seconds: 90 }).config, game.config);
   const ids = game.rack.slice(0, 3).map(t => t.id);
-  assert.equal(submitWord(game, [ids[0], ids[0], ids[1]], 2000).game.score, 0);
-  assert.equal(timeLeft(game, 6000), 0);
-  assert.equal(submitWord(game, ids, 6000).game.score, 0);
-  assert.equal(finish(game, 3000).endedAt, 3000);
+  assert.equal(submitWord(game, [ids[0], ids[0], ids[1]], 900000).game.score, 0);
+  assert.equal(publicGame(game).endedAt, null);
+  assert.equal('remaining' in publicGame(game), false);
+  const stuck = { ...game, rack: 'QQQ'.split('').map((letter, id) => ({ letter, id })), bag: [] };
+  assert.equal(submitWord(stuck, [0, 1, 2], 900000).error, 'Not in the word list');
+  assert.equal(submitWord(stuck, [0, 1, 2], 900000).game.endedAt, null);
+  const completed = finish(game, 900000);
+  assert.equal(completed.endedAt, 900000);
+  assert.equal(submitWord(completed, ids, 900001).error, 'Round has ended');
 });

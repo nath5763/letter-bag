@@ -16,4 +16,5 @@ test('daily state reads with GET and round actions use POST, including empty bod
     ['/api/state', 'GET'], ['/api/start', 'POST'], ['/api/submit', 'POST'], ['/api/finish', 'POST']
   ]);
   assert.deepEqual(JSON.parse(requests[2].options.body), { ids: [1, 2, 3] });
+  assert.equal(requests[3].options.body, undefined);
 });
