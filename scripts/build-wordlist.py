@@ -45,7 +45,7 @@ def apply(word: str, kind: str, rule):
 
 
 def clean(word: str):
-    return word if re.fullmatch(r"[a-z]{3,30}", word) else None
+    return word.lower() if re.fullmatch(r"[A-Za-z]{3,30}", word) else None
 
 
 words = set()
@@ -58,17 +58,19 @@ for locale in ("en_US", "en_GB", "en_CA", "en_AU"):
     for entry in dic.read_text(encoding="utf-8-sig").splitlines()[1:]:
         raw = entry.split()[0] if entry.strip() else ""
         base, _, flags = raw.partition("/")
-        if "!" in flags or not clean(base):
+        normalized_base = clean(base)
+        if "!" in flags or not normalized_base:
             continue
-        words.add(base)
+        words.add(normalized_base)
         prefixes = []
         suffixes = []
         for flag in flags:
             for kind, output in (("PFX", prefixes), ("SFX", suffixes)):
                 for rule in rules[kind].get(flag, []):
                     form = apply(base, kind, rule)
-                    if form and clean(form):
-                        words.add(form)
+                    normalized_form = clean(form) if form else None
+                    if normalized_form:
+                        words.add(normalized_form)
                         if crosses[kind].get(flag):
                             output.append((flag, form))
         for prefix_flag, prefixed in prefixes:
@@ -76,8 +78,9 @@ for locale in ("en_US", "en_GB", "en_CA", "en_AU"):
                 if crosses["PFX"].get(prefix_flag) and crosses["SFX"].get(suffix_flag):
                     for rule in rules["SFX"].get(suffix_flag, []):
                         form = apply(prefixed, "SFX", rule)
-                        if form and clean(form):
-                            words.add(form)
+                        normalized_form = clean(form) if form else None
+                        if normalized_form:
+                            words.add(normalized_form)
 
 OUT.write_text("// Generated from SCOWL-derived Hunspell dictionaries. See data/SCOWL-NOTICE.txt.\n"
                + "export const WORDS = new Set(`\n"

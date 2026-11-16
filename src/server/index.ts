@@ -4,12 +4,12 @@ import { createServer, getServerPort, context, redis, reddit } from '@devvit/web
 import { telemetry } from '@devvit/analytics/server/reddit';
 import { createGame, finish, publicGame, submitWord } from '../shared/engine.js';
 import { storedJson } from './stored-json.js';
-import { currentStreak, nextProfile } from './streak.js';
+import { currentStreak, nextProfile, unlocksCenturyBadge, unlocksLifetimeBadge, LIFETIME_BADGE_POINTS } from './streak.js';
 import { rankRows } from './ranking.js';
 
 const app = new Hono();
 type Game = ReturnType<typeof createGame>;
-type Profile = { lastDay: string; current: number; best: number };
+type Profile = { lastDay: string; current: number; best: number; centuryBadge?: boolean; lifetimePoints?: number; bottomlessBagBadge?: boolean };
 type PostRecord = { status: 'creating'; token: string; claimedAt: number } | { status: 'published'; postId: string };
 const utcDay = (time = Date.now()) => new Date(time).toISOString().slice(0, 10);
 const datedPost = () => {
@@ -34,7 +34,9 @@ async function load(day: string | null) {
 async function playerProfile(day: string) {
   if (!context.userId) return null;
   const profile = storedJson(await redis.get(profileKey(context.userId))) as Profile | null;
-  return { current: currentStreak(profile, day), best: profile?.best || 0 };
+  const lifetimePoints = profile?.lifetimePoints ?? await redis.zScore(allTimeKey, context.userId) ?? 0;
+  return { current: currentStreak(profile, day), best: profile?.best || 0, centuryBadge: !!profile?.centuryBadge,
+    bottomlessBagBadge: !!profile?.bottomlessBagBadge || lifetimePoints >= LIFETIME_BADGE_POINTS };
 }
 
 async function commitResult(day: string, userId: string, current: Game | null, next: Game) {
@@ -44,21 +46,31 @@ async function commitResult(day: string, userId: string, current: Game | null, n
   for (let retry = 0; retry < 6; retry++) {
     const tx = await redis.watch(key, marker, profileId);
     const [rawGame, rawMarker, rawProfile] = await Promise.all([redis.get(key), redis.get(marker), redis.get(profileId)]);
-    if (JSON.stringify(storedJson(rawGame)) !== JSON.stringify(current)) { await tx.unwatch(); return false; }
+    if (JSON.stringify(storedJson(rawGame)) !== JSON.stringify(current)) { await tx.unwatch(); return null; }
     const profile = storedJson(rawProfile) as Profile | null;
     const qualifies = next.endedAt !== null && next.words.length > 0 && !rawMarker;
+    const unlocked = unlocksCenturyBadge(profile, current?.score || 0, next.score);
+    const priorLifetime = qualifies ? (profile?.lifetimePoints ?? await redis.zScore(allTimeKey, userId) ?? 0) : 0;
+    const lifetimeUnlocked = qualifies && unlocksLifetimeBadge(profile, priorLifetime, next.score);
     await tx.multi();
     await tx.set(key, JSON.stringify(next));
     if (qualifies) {
       await tx.set(marker, String(next.score));
-      await tx.set(profileId, JSON.stringify(nextProfile(profile, day) satisfies Profile));
       await tx.zAdd(dailyKey(day), { member: userId, score: next.score });
       await tx.zIncrBy(allTimeKey, userId, next.score);
       await tx.expire(dailyKey(day), 90 * 86400);
     }
-    if (await tx.exec() !== null) return true;
+    if (qualifies || unlocked) {
+      const updated = qualifies ? nextProfile(profile, day) : (profile || { lastDay: '', current: 0, best: 0 });
+      await tx.set(profileId, JSON.stringify({ ...updated,
+        ...(unlocked ? { centuryBadge: true } : {}),
+        ...(qualifies ? { lifetimePoints: priorLifetime + next.score } : {}),
+        ...(qualifies && priorLifetime + next.score >= LIFETIME_BADGE_POINTS ? { bottomlessBagBadge: true } : {})
+      } satisfies Profile));
+    }
+    if (await tx.exec() !== null) return { unlocked, lifetimeUnlocked };
   }
-  return false;
+  return null;
 }
 
 async function change(day: string | null, transform: (game: Game | null) => { game: Game; error?: string | null }) {
@@ -75,7 +87,8 @@ async function change(day: string | null, transform: (game: Game | null) => { ga
       return { status: 400, body: { game: visible(result.game), error: result.error } };
     }
     await tx.unwatch();
-    if (await commitResult(day, context.userId, current, result.game)) return { status: 200, body: { game: visible(result.game), error: null } };
+    const committed = await commitResult(day, context.userId, current, result.game);
+    if (committed) return { status: 200, body: { game: visible(result.game), error: null, profile: await playerProfile(day), achievementUnlocked: committed.unlocked, lifetimeAchievementUnlocked: committed.lifetimeUnlocked } };
   }
   return { status: 409, body: { error: 'Round changed; try again' } };
 }

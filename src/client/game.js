@@ -20,6 +20,10 @@ let profile = null;
 let leaderboard = null;
 let leaderboardOpen = false;
 const localRound = () => practice || anonymous;
+const achievementBadges = () => [
+  profile?.centuryBadge ? '<span class="achievement-badge">★ Bookworm · 100+ daily points</span>' : '',
+  profile?.bottomlessBagBadge ? '<span class="achievement-badge">★ Bottomless Bag · 20,000 lifetime points</span>' : ''
+].filter(Boolean).join(' ');
 const tileFace = letter => `${letter}${letterBonus(letter) ? `<span class="tile-bonus" aria-hidden="true">${letterBonus(letter)}</span>` : ''}`;
 const wordPoints = () => scoreWord(selected.map(id => game.rack.find(tile => tile.id === id)?.letter || '').join(''));
 const pointsLabel = () => selected.length >= 3 ? `+${wordPoints().points} POINTS` : '3 LETTERS MINIMUM';
@@ -90,8 +94,9 @@ function render() {
     </section>
     ${practice && !active ? `<footer class="practice-tools"><button id="replay">Replay seed</button><button id="new">New puzzle</button><span>Local practice &middot; unlimited attempts</span></footer>` : ''}
     ${infoOpen && !started ? `<div class="info-backdrop" id="info-backdrop"><section class="info-dialog" role="dialog" aria-modal="true" aria-labelledby="info-title"><button type="button" class="info-close" id="info-close" aria-label="Close instructions">&times;</button><span class="label">HOW TO PLAY</span><h2 id="info-title">Daily Letter Bag</h2><ul><li>You have 30 letters. Start with 15 in your rack; used letters are replaced from the bag in order.</li><li>The next five letters are visible, so you can plan ahead.</li><li>Tap at least 3 wooden letters to form a word, then tap Play word.</li><li>Longer words earn progressively more points: 1 plus 1, 2, 3, and so on. A 3-letter word earns 7 base points.</li><li>Rare letters add bonus points for each tile: Q and Z earn 2; J, X, K, and V earn 1.</li><li>There is no time limit. Earn the highest possible score from your available letters, then choose Finish.</li><li>A word can score once per round. Invalid words do not use letters.</li>${practice ? '' : '<li>Signed-in players get one scored attempt per UTC day.</li>'}</ul><button type="button" class="primary" id="info-done">Got it</button></section></div>` : ''}`;
-  if (!started && profile) app.querySelector('.opening-copy')?.insertAdjacentHTML('beforeend', `<p class="streak-note">Current streak: ${profile.current} ${profile.current === 1 ? 'day' : 'days'} · Best: ${profile.best}</p>`);
-  if (infoOpen && !practice) app.querySelector('.info-dialog ul')?.insertAdjacentHTML('beforeend', '<li>Finish a signed-in daily round with at least one valid word to grow your UTC-day streak and enter the community leaderboards.</li>');
+  if (!started && profile) app.querySelector('.opening-copy')?.insertAdjacentHTML('beforeend', `<p class="streak-note">Current streak: ${profile.current} ${profile.current === 1 ? 'day' : 'days'} · Best: ${profile.best}${achievementBadges() ? `<br>${achievementBadges()}` : ''}</p>`);
+  if (ended && !localRound() && achievementBadges()) app.querySelector('.result-score-label')?.insertAdjacentHTML('afterend', `<div class="achievement-list">${achievementBadges()}</div>`);
+  if (infoOpen && !practice) app.querySelector('.info-dialog ul')?.insertAdjacentHTML('beforeend', '<li>Finish a signed-in daily round with at least one valid word to grow your UTC-day streak and enter the community leaderboards.</li><li>Reach 100 points in a signed-in daily round to permanently earn the Bookworm badge.</li><li>Earn 20,000 lifetime points from completed daily rounds to unlock the Bottomless Bag badge.</li>');
   if (ended && !localRound()) app.querySelector('.result-actions')?.insertAdjacentHTML('beforeend', '<button type="button" class="secondary" id="leaderboard">Leaderboards</button>');
   if (leaderboardOpen) app.insertAdjacentHTML('beforeend', `<div class="info-backdrop" id="leaderboard-backdrop"><section class="info-dialog leaderboard-dialog" role="dialog" aria-modal="true" aria-labelledby="leaderboard-title"><button type="button" class="info-close" id="leaderboard-close" aria-label="Close leaderboards">&times;</button><span class="label">COMMUNITY STANDINGS</span><h2 id="leaderboard-title">Leaderboards</h2>${leaderboard ? `<h3>Today · ${escapeHtml(leaderboard.day)}</h3><p>Highest points first; fewer words break a points tie.</p>${boardHtml(leaderboard.daily, true)}<h3>All time · total points</h3>${boardHtml(leaderboard.allTime)}` : '<p>Loading standings…</p>'}</section></div>`);
   arrivingTiles = new Set();
@@ -192,10 +197,11 @@ function bind() {
       refreshSelection();
       const previousBag = game.bag.length;
       const result = localRound() ? submitWord(game, selected) : await api('submit', { ids: selected });
+      if (!localRound()) profile = result.profile;
       if (!result.error) arrivingTiles = new Set(result.game.rack.filter(tile => !game.rack.some(old => old.id === tile.id)).map(tile => tile.id));
       game = result.game;
       const played = result.game.words.at(-1);
-      message = result.error || `${played.word.toUpperCase()} accepted: +${played.points} points${played.bonusPoints ? ` (${played.basePoints} base + ${played.bonusPoints} letter bonus)` : ''}.`;
+      message = result.error || `${played.word.toUpperCase()} accepted: +${played.points} points${played.bonusPoints ? ` (${played.basePoints} base + ${played.bonusPoints} letter bonus)` : ''}.${result.achievementUnlocked ? ' Bookworm unlocked!' : ''}${result.lifetimeAchievementUnlocked ? ' Bottomless Bag unlocked!' : ''}`;
       if (!result.error) {
         selected = [];
         render();
@@ -210,7 +216,7 @@ function bind() {
     }
   });
   app.querySelector('#finish')?.addEventListener('click', async () => {
-    try { game = localRound() ? finish(game) : (await api('finish')).game; selected = []; message = ''; render(); await track(() => telemetry.interaction({ action: 'finish' })); await reportEnd(); await refreshProfile(); render(); }
+    try { const result = localRound() ? { game: finish(game) } : await api('finish'); game = result.game; if (!localRound()) profile = result.profile; selected = []; message = result.lifetimeAchievementUnlocked ? 'Bottomless Bag unlocked!' : ''; render(); await track(() => telemetry.interaction({ action: 'finish' })); await reportEnd(); await refreshProfile(); render(); }
     catch (error) { message = error.message; render(); }
   });
   app.querySelector('#replay')?.addEventListener('click', () => { game = createGame(seed, config); selected = []; message = ''; render(); });

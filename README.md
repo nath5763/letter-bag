@@ -1,6 +1,6 @@
 # Daily Letter Bag
 
-A daily word game built as a Reddit Devvit Web interactive post. Everyone playing a dated post gets the same ordered 30 letters. The standard puzzle has 12 vowels and 18 consonants, split near 6 vowels and 9 consonants in both the opening rack and bag. Select tiles to make words; used letters refill from the bag. There is no time limit. Longer words score progressively more, and Q/Z earn 2 bonus points each while J/X/K/V earn 1. The game saves one attempt per signed-in player per UTC day and ranks daily scores by points, then fewer words.
+A daily word game built as a Reddit Devvit Web interactive post. Everyone playing a dated post gets the same ordered 30 letters. The standard puzzle has 12 vowels and 18 consonants, split near 6 vowels and 9 consonants in both the opening rack and bag. Select tiles to make words; used letters refill from the bag. There is no time limit. Longer words score progressively more, and Q/Z earn 2 bonus points each while J/X/K/V earn 1. The game saves one attempt per signed-in player per UTC day and ranks daily scores by points, then fewer words. A signed-in player permanently earns the Bookworm badge upon reaching 100 points in a daily round, and the Bottomless Bag badge upon reaching 20,000 lifetime points from completed daily rounds.
 
 ## Play locally
 
@@ -26,7 +26,7 @@ The post stores its UTC date in `postData`; player state and each day's post ID 
 
 Completed rounds show a shareable result card with the date-based game number (`YYYYMMDD`), score, word count, and longest word length. **Share result** opens Reddit's share sheet; **Copy result** copies spoiler-free text and the current post link. Practice and logged-out results are labeled separately.
 
-The bundled lexicon in `src/shared/words.js` contains 148,507 entries generated from the locally installed SCOWL-derived Hunspell English dictionaries (US, GB, CA, and AU). It includes inflected forms such as `cavities` and `okras`, and excludes entries that are not plain lowercase alphabetic words or are marked `NOSUGGEST`. It is a broad English game dictionary, **not** the licensed official Scrabble word list. Source details and required copyright notices are in `data/`; the regeneration script is `scripts/build-wordlist.py`. No external requests are made by the game client.
+The bundled lexicon in `src/shared/words.js` contains 184,576 entries generated from the locally installed SCOWL-derived Hunspell English dictionaries (US, GB, CA, and AU). It includes inflected forms such as `cavities` and `okras`, and accepts capitalized dictionary entries such as `Venus` by storing them in lowercase. Entries that are not plain alphabetic words or are marked `NOSUGGEST` are excluded. It is a broad English game dictionary, **not** the licensed official Scrabble word list. Source details and required copyright notices are in `data/`; the regeneration script is `scripts/build-wordlist.py`. No external requests are made by the game client.
 
 The original game rules are in `Daily_Letter_Bag_Game_Rules_v2.md`. The dailytracker.cc connection is a later milestone.
 

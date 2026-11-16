@@ -5,7 +5,15 @@ import { WORDS } from '../src/shared/words.js';
 
 test('broad lexicon includes reported words and inflections', () => {
   assert.ok(WORDS.size > 100_000);
-  for (const word of ['cavity', 'cavities', 'okra', 'okras']) assert.ok(WORDS.has(word), word);
+  for (const word of ['cavity', 'cavities', 'okra', 'okras', 'venus']) assert.ok(WORDS.has(word), word);
+});
+
+test('capitalized dictionary entries are accepted through uppercase tiles', () => {
+  const original = createGame('venus', {}, 1000);
+  const game = { ...original, rack: 'VENUS'.split('').map((letter, id) => ({ letter, id })), bag: [] };
+  const result = submitWord(game, [0, 1, 2, 3, 4], 2000);
+  assert.equal(result.error, null);
+  assert.equal(result.game.words[0].word, 'venus');
 });
 
 test('letters stay hidden in the public view until the round starts', () => {
